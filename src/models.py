@@ -36,6 +36,7 @@ class Mailing(NamedTuple):
     Text: str
     Date: str
     Views: int
+    Picture: str
 
 
 class Answer(NamedTuple):

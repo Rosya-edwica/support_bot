@@ -20,22 +20,22 @@ class Config(NamedTuple):
     BotName: str
     Token: str
     MongodbName: str
-    Admins: list[int]
+    StartMessage: str
 
 
 def load_config() -> list[Config]:
     with open("config.json", encoding="utf-8", mode="r") as f:
         data = json.load(f)
     res = []
-    admins = data["admins"]
     for i in data["bots"]:
         res.append(Config(
             BotName=i["name"],
             Token=i["token"],
             MongodbName=i["mongodb_name"],
-            Admins=admins
+            StartMessage=i["start_message"],
         ))
     return res
+
 
 
 def validate_email(email: str):

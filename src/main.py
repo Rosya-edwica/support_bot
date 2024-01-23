@@ -5,6 +5,7 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 import keyboards as kb
 import tools
 import re
+import os
 from models import NewQuestion, NewAnswer, Mailing
 from db import Storage
 from datetime import datetime
@@ -41,18 +42,19 @@ class AdminMailing(StatesGroup):
 @dp.message_handler(commands=["start"])
 async def start_command(msg: types.Message):
     """Админу показываем одни кнопки, а пользователю другие"""
+    user_text = f"""Привет, {msg.from_user.first_name}!👋\n{config.StartMessage}"""
 
     user_id = msg.from_user.id
-    if user_id in tools.ADMINS:
+    if user_id in mongoStorage.get_admins_id():
         await msg.answer(text="Приветственное сообщение для админа", reply_markup=kb.get_admin_menu())
     else:
         categories = mongoStorage.get_categories()
-        await msg.answer(text="Приветственное сообщение для пользователя", reply_markup=kb.get_users_menu(categories))
+        await msg.answer(text=user_text, reply_markup=kb.get_users_menu(categories))
 
 
 @dp.message_handler()
 async def text_message_filter(msg: types.Message):
-    if msg.from_user.id in config.Admins:
+    if msg.from_user.id in mongoStorage.get_admins_id():
         await admin_message_filter(msg)
     else:
         await user_message_filter(msg)
@@ -133,6 +135,11 @@ async def get_new_email_from_user(msg: types.Message, state: FSMContext):
 @dp.message_handler(state=UserQuestion.New)
 async def process_new_user_question(msg: types.Message, state: FSMContext):
     # Сохраняем любое сообщение 
+    if await check_message_is_category(msg):
+        await state.finish()
+        await show_questions_by_category(msg)
+        return
+
     user_id = msg.from_user.id
     question = NewQuestion(
         Id=0,
@@ -183,7 +190,7 @@ async def rate_answer(call: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data == "continue_chating")
 async def continue_chating(call: types.CallbackQuery):
     await bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
-    await bot.send_message(chat_id=call.message.chat.id, text="Опишите вашу проблему")
+    await bot.send_message(chat_id=call.message.chat.id, text="Опишите вашу проблему:")
     await UserQuestion.New.set()
 
 # ------------------------------------------------------admin------------------------------------------------------------------
@@ -201,7 +208,7 @@ async def send_new_question_to_admins(question_id: int, question: NewQuestion = 
         f"❓Вопрос: {question.Question}",
     ))
 
-    for admin in config.Admins:
+    for admin in mongoStorage.get_admins_id():
         await bot.send_message(chat_id=admin, text=message)
 
 
@@ -251,7 +258,7 @@ async def send_notification_to_admins(question_id: int, ignore_id: int = 0):
         f"❔ Вопрос: {answer.Question}",
         f"📝 Ответ: {answer.Answer}"
     ))
-    for admin in config.Admins:
+    for admin in mongoStorage.get_admins_id():
         if admin == ignore_id: continue
         await bot.send_message(chat_id=admin, text=message)
 
@@ -275,6 +282,9 @@ async def check_message_is_admin_actions(msg: types.Message):
     elif action == "сделать рассылку":
         await msg.answer("Напишите текст рассылки:")
         await AdminMailing.New.set()
+    elif action == "рассылка с картинкой":
+        await msg.answer("Отправь картинку сразу вместе с текстом")
+        await AdminMailing.Image.set()
 
     elif action == "непрочитанные сообщения":
         await send_open_question_to_admin(msg.chat.id)
@@ -288,7 +298,7 @@ async def send_open_question_to_admin(chat_id: int):
     for qst in questions:
         text = "\n".join((
                 f"id: {qst.Id}",
-                f"👤 Имя пользователя: {qst.FirstName}",
+                f"👤 Имя пользователя: {qst.FirstName if qst.FirstName else qst.UserName}",
                 f"💌 Почта: {qst.Email}",
                 f"Категория: {qst.Category}",
                 f"❓Вопрос: {qst.Question}",
@@ -299,17 +309,14 @@ async def send_open_question_to_admin(chat_id: int):
 
 @dp.message_handler(state=AdminMailing.New)
 async def new_mailing(msg: types.Message, state: FSMContext):
-    await msg.answer(text=msg.text, reply_markup=kb.get_mailing_keyboard())
-    await bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
+    timed_message = await msg.answer(text=msg.text, reply_markup=kb.get_mailing_keyboard())
+    UserTimedMessageCache[msg.from_user.id] = timed_message.message_id
     await state.finish()
+    # await bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
 
 @dp.callback_query_handler(lambda c: "mailing" in c.data)
 async def process_mailing(call: types.CallbackQuery):
-    if call.data == "edit_mailing":
-        await bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
-        await AdminMailing.New.set()
-    
-    elif call.data == "send_mailing":
+    if call.data == "send_mailing":
         users = mongoStorage.get_all_users()
         for user in users:
             await bot.send_message(chat_id=user, text=call.message.text)
@@ -321,12 +328,67 @@ async def process_mailing(call: types.CallbackQuery):
             AdminUser=call.from_user.username,
             Text=call.message.text,
             Date=datetime.now(),
-            Views=len(mongoStorage.get_all_users())
+            Views=len(mongoStorage.get_all_users()),
+            Picture=""
         ))
     else:
         await bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
         await bot.send_message(chat_id=call.from_user.id, text="Рассылки не будет")
 
+@dp.edited_message_handler(lambda msg: True)
+async def edit_mailing(msg: types.Message):
+    try:
+        await bot.delete_message(chat_id=msg.chat.id, message_id=UserTimedMessageCache[msg.from_user.id])
+        del UserTimedMessageCache[msg.from_user.id]
+    except:
+        ...
+
+    timed_message = await msg.answer(text=msg.text, reply_markup=kb.get_mailing_keyboard())
+    UserTimedMessageCache[msg.from_user.id] = timed_message.message_id
+
+
+@dp.message_handler(state=AdminMailing.Image, content_types=["photo"])
+async def img_mailing(msg: types.Message, state: FSMContext):
+    timed_message = await msg.reply_photo(photo=msg.photo[-1].file_id, caption=msg.caption, reply_markup=kb.get_mailing_img_keyboard())
+    UserTimedMessageCache[msg.from_user.id] = timed_message.message_id
+    await state.finish()
+
+@dp.callback_query_handler(lambda c: "img" in c.data)
+async def process_img_mailing(call: types.CallbackQuery):
+    if call.data == "send_img":
+        os.makedirs("imgs", exist_ok=True)
+        img_path = f"imgs/{datetime.now()}.jpg"
+        await call.message.photo[-1].download(destination_file=img_path)
+
+        users = mongoStorage.get_all_users()
+        for user in users:
+            await bot.send_photo(chat_id=user, photo=call.message.photo[-1].file_id,  caption=call.message.caption)
+        await bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
+        await bot.send_message(chat_id=call.from_user.id, text="Отправлено!")
+        mongoStorage.save_mailing(Mailing(
+            AdminId=call.from_user.id,
+            AdminUser=call.from_user.username,
+            Text=call.message.caption,
+            Date=datetime.now(),
+            Views=len(mongoStorage.get_all_users()),
+            Picture=img_path
+        ))
+    else:
+        await bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
+        await bot.send_message(chat_id=call.from_user.id, text="Рассылки не будет")
+
+
+
+@dp.edited_message_handler(lambda msg: True, content_types=["photo"])
+async def edit_img_mailing(msg: types.Message):
+    try:
+        await bot.delete_message(chat_id=msg.chat.id, message_id=UserTimedMessageCache[msg.from_user.id])
+        del UserTimedMessageCache[msg.from_user.id]
+    except:
+        ...
+    timed_message = await msg.answer_photo(photo=msg.photo[-1].file_id, caption=msg.caption, reply_markup=kb.get_mailing_img_keyboard())
+
+    UserTimedMessageCache[msg.from_user.id] = timed_message.message_id
 
 
 if __name__ == "__main__":

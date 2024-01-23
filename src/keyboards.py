@@ -15,6 +15,7 @@ def get_admin_menu() -> ReplyKeyboardMarkup:
     menu = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     text_list = (
         "Сделать рассылку",
+        "Рассылка с картинкой",
         "Статистика",
         "Непрочитанные сообщения"
     )
@@ -54,13 +55,20 @@ def get_rate_answer_keyboard(question_id: int) -> InlineKeyboardMarkup:
 
 def get_mailing_keyboard() -> InlineKeyboardMarkup:
     menu = InlineKeyboardMarkup(row_width=2)
-    edit = InlineKeyboardButton(text="📝 Редактировать", callback_data="edit_mailing")
-    send = InlineKeyboardButton(text="✅ Отправить", callback_data="send_mailing")
     cancel = InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_mailing")
-    menu.insert(edit)
-    menu.insert(send)
+    send = InlineKeyboardButton(text="✅ Разослать", callback_data="send_mailing")
     menu.insert(cancel)
+    menu.insert(send)
     return menu
+
+def get_mailing_img_keyboard() -> InlineKeyboardMarkup:
+    menu = InlineKeyboardMarkup(row_width=2)
+    cancel = InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_img")
+    send = InlineKeyboardButton(text="✅ Разослать", callback_data="send_img")
+    menu.insert(cancel)
+    menu.insert(send)
+    return menu
+
 
 def get_next_open_question(id: int = 0) -> InlineKeyboardMarkup:
     menu = InlineKeyboardMarkup(row_width=2)

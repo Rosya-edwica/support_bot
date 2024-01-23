@@ -11,10 +11,15 @@ class Storage:
     def __init__(self, connect_url: str = MONGO_URL, db_name: str = "support_bot"):
         self.client = pymongo.MongoClient(connect_url)
         self.db = self.client[db_name]
+        self.admins_db = self.client["support_admins"]
+        self.admins_cl = self.admins_db["admins"]
         self.prepared_questions_cl = self.db["questions"]
         self.questions_cl = self.db["requests"]
         self.mailing_cl = self.db["mailing"]
 
+    def get_admins_id(self) -> tuple[int]:
+        admins = self.admins_cl.distinct("id", {"active": True})
+        return tuple(admins)
     
     def get_categories(self) -> tuple[str]:
         categories = self.prepared_questions_cl.distinct("category")
@@ -162,7 +167,8 @@ class Storage:
             "admin_user": mailing.AdminUser,
             "text": mailing.Text,
             "views": mailing.Views,
-            "date": mailing.Date
+            "date": mailing.Date,
+            "picture": mailing.Picture
         }
         self.mailing_cl.insert_one(doc)
 
