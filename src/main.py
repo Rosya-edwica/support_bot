@@ -176,10 +176,8 @@ async def rate_answer(call: types.CallbackQuery):
     rate, question_id = call.data.split("_") # делим по символу '_' тк нам придет такая строка 'dislike_1' или 'like_1214'
     if rate == "like":
         mongoStorage.mark_answer_as_correct(int(question_id))
-        print("Ответ понравился")
         await bot.send_message(chat_id=call.message.chat.id, text="Ваша поддержка мотивирует нас становиться лучше! Спасибо! 🎉")
     else:
-        print("Ответ не понравился")
         mongoStorage.mark_answer_as_correct(int(question_id), liked=False)
         await bot.send_message(chat_id=call.message.chat.id, text="Нам жаль, что вы не довольны. Можете ли вы задать свой вопрос еще раз или уточнить, что именно вам не понравилось? 😓")
         await UserQuestion.New.set()
