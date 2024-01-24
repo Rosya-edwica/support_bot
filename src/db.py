@@ -1,6 +1,7 @@
 import pymongo
 from models import PreparedQuestion, NewQuestion, NewAnswer, Answer, Statistic, AdminStat, CategoryStat, Mailing
 import re
+import json
 from collections import Counter
 
 # MONGO_URL = "mongodb://94.250.253.88:27017/"
@@ -8,7 +9,7 @@ MONGO_URL = "mongodb://localhost:27017/"
 
 
 class Storage:
-    def __init__(self, connect_url: str = MONGO_URL, db_name: str = "support_bot"):
+    def __init__(self, connect_url: str = MONGO_URL, db_name: str = "support_bot", add_prepared_questions: bool = False):
         self.client = pymongo.MongoClient(connect_url)
         self.db = self.client[db_name]
         self.admins_db = self.client["support_admins"]
@@ -16,6 +17,15 @@ class Storage:
         self.prepared_questions_cl = self.db["questions"]
         self.questions_cl = self.db["requests"]
         self.mailing_cl = self.db["mailing"]
+        if add_prepared_questions:
+            self.add_questions()
+        
+    def add_questions(self):
+        with open("questions.json", mode="r", encoding="utf-8") as f:
+            data = json.load(f)
+            
+        if not self.prepared_questions_cl.find_one():
+            self.prepared_questions_cl.insert_many(data)
 
     def get_admins_id(self) -> tuple[int]:
         admins = self.admins_cl.distinct("id", {"active": True})

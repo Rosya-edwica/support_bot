@@ -24,7 +24,7 @@ config = [cfg for cfg in tools.load_config() if cfg.BotName == args.bot][0]
 
 bot = Bot(config.Token)
 dp = Dispatcher(bot, storage=MemoryStorage())
-mongoStorage = Storage(db_name=config.MongodbName)
+mongoStorage = Storage(db_name=config.MongodbName, add_prepared_questions=True)
 preparedQuestions = mongoStorage.get_questions()
 UserCacheCategories = {}
 UserCacheEmails = {}
