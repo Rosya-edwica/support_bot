@@ -1,15 +1,17 @@
-from aiogram import Bot, executor, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.dispatcher import FSMContext
+from aiogram import Bot, executor, Dispatcher, types
+from datetime import datetime
 import keyboards as kb
-import tools
+import argparse
 import re
 import os
-from models import NewQuestion, NewAnswer, Mailing
+
 from db import Storage
-from datetime import datetime
-import argparse
+from models import Question, Answer, Mailing
+import tools
+import locale
 
 parser = argparse.ArgumentParser(
                     prog='Бот поддержки Edwica.ru',
@@ -18,9 +20,10 @@ parser = argparse.ArgumentParser(
 
 parser.add_argument("-b", "--bot", required=True, help="Выбери название бота: edwica, openedu, profinansy")
 args = parser.parse_args()
-
 config = [cfg for cfg in tools.load_config() if cfg.BotName == args.bot][0]
 
+locale.setlocale(locale.LC_ALL, "ru_RU") # Отображение даты на русском языке
+os.makedirs("data", exist_ok=True) # Создаем папку для хранения картинок/дампов
 
 bot = Bot(config.Token)
 dp = Dispatcher(bot, storage=MemoryStorage())
@@ -66,7 +69,7 @@ async def user_message_filter(msg: types.Message):
     if await check_message_is_category(msg):
         # Сценарий, когда пользователь выбрал категорию
         await show_questions_by_category(msg)
-    else: 
+    else:
         # Сценарий, когда пользователь что-то написал (не значение какой-то кнопки)
         await detect_user_email(msg.from_user.id, msg.chat.id)
 
@@ -78,12 +81,12 @@ async def check_message_is_category(msg: types.Message) -> bool:
     if msg.text.lower() in (i.lower() for i in categories):
         UserCacheCategories[msg.from_user.id] = msg.text.lower()
         return True
-    
+
 async def show_questions_by_category(msg: types.Message):
     category = UserCacheCategories[msg.from_user.id]
     if category == "другое":
         await detect_user_email(msg.from_user.id, msg.chat.id)
-    
+
     else:
         questions = mongoStorage.get_questions_by_category(category)
         category_keyboard = kb.get_keyboard_by_category(questions)
@@ -97,7 +100,7 @@ async def callback_question(call: types.CallbackQuery):
     if call.message.text.lower() == "другое":
         await detect_user_email(call.from_user.id, call.message.chat.id)
         return
-    
+
     for qst in preparedQuestions:
         if qst.CallbackData == call.data:
             await bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
@@ -134,21 +137,22 @@ async def get_new_email_from_user(msg: types.Message, state: FSMContext):
 
 @dp.message_handler(state=UserQuestion.New)
 async def process_new_user_question(msg: types.Message, state: FSMContext):
-    # Сохраняем любое сообщение 
+    # Сохраняем любое сообщение
     if await check_message_is_category(msg):
         await state.finish()
         await show_questions_by_category(msg)
         return
 
     user_id = msg.from_user.id
-    question = NewQuestion(
+    question = Question(
         Id=0,
         FirstName=msg.from_user.first_name,
         UserId=user_id,
         UserName=msg.from_user.username,
         Question=msg.text,
         Category=UserCacheCategories[user_id] if user_id in UserCacheCategories else "другое",
-        Email=UserCacheEmails[msg.from_user.id] if user_id in UserCacheEmails else mongoStorage.get_user_email(user_id)
+        Email=UserCacheEmails[msg.from_user.id] if user_id in UserCacheEmails else mongoStorage.get_user_email(user_id),
+        Date=datetime.now()
 
     )
     question_id = mongoStorage.save_new_question(question)
@@ -159,7 +163,7 @@ async def process_new_user_question(msg: types.Message, state: FSMContext):
 
 
 async def send_answer_to_user(question_id: int):
-    answer = mongoStorage.get_answer_by_question_id(question_id)
+    answer = mongoStorage.get_answer(question_id)
     if not answer:
         return
     if answer.UserId in UserTimedMessageCache:
@@ -193,10 +197,10 @@ async def continue_chating(call: types.CallbackQuery):
 
 # ------------------------------------------------------admin------------------------------------------------------------------
 
-async def send_new_question_to_admins(question_id: int, question: NewQuestion = None):
+async def send_new_question_to_admins(question_id: int, question: Question = None):
     if not question:
         question = mongoStorage.get_question_by_id(question_id)
-    
+
     message = "\n".join((
         f"⚠️ Новый вопрос от: @{question.UserName}",
         f"id: {question_id}",
@@ -224,25 +228,27 @@ async def admin_reply_message(msg: types.Message):
         question_id = int(re.findall(r"id: \d+", question_text)[0].replace("id: ", ""))
     except:
         return
-    
+
     closed = mongoStorage.check_question_is_closed(question_id)
     if closed is None:
         await msg.answer("Вопрос был удален из БД")
-        return 
-    
+        return
+
     if closed:
-        answer = mongoStorage.get_admin_answer(question_id)
-        await msg.answer(f"На это сообщение уже ответил: @{answer.AdminName}\nВот ответ:{answer.Answer}")
+        answer = mongoStorage.get_answer(question_id)
+        await msg.answer(f"На это сообщение уже ответил: @{answer.AdminName}\nВот ответ:{answer.Text}")
         return
 
 
 
-    mongoStorage.save_answer(NewAnswer(
-        QuestionId=question_id,
-        Answer=msg.text,
+    mongoStorage.save_answer(Answer(
+        Id=question_id,
+        Text=msg.text,
         AdminId=msg.from_user.id,
         AdminName=msg.from_user.username,
-        Question=question_text
+        Question=question_text,
+        UserId=0,
+        UserName=""
     ))
     await msg.answer("Готово!")
     await send_answer_to_user(question_id)
@@ -250,11 +256,11 @@ async def admin_reply_message(msg: types.Message):
 
 
 async def send_notification_to_admins(question_id: int, ignore_id: int = 0):
-    answer = mongoStorage.get_admin_answer(question_id)
+    answer = mongoStorage.get_answer(question_id)
     message = "\n".join((
         f"👤 Админ @{answer.AdminName} ответил на вопрос № {question_id}",
         f"❔ Вопрос: {answer.Question}",
-        f"📝 Ответ: {answer.Answer}"
+        f"📝 Ответ: {answer.Text}"
     ))
     for admin in mongoStorage.get_admins_id():
         if admin == ignore_id: continue
@@ -295,11 +301,12 @@ async def send_open_question_to_admin(chat_id: int):
         return
     for qst in questions:
         text = "\n".join((
-                f"id: {qst.Id}",
+                f"#️⃣ id: {qst.Id}",
                 f"👤 Имя пользователя: {qst.FirstName if qst.FirstName else qst.UserName}",
                 f"💌 Почта: {qst.Email}",
-                f"Категория: {qst.Category}",
-                f"❓Вопрос: {qst.Question}",
+                f"🏷️ Категория: {qst.Category}",
+                f"❓ Вопрос: {qst.Question}\n",
+                f"📅 Дата: {qst.Date.strftime('%d %B, %Y г. %H:%M')}"
             ))
         await bot.send_message(chat_id, text)
 
@@ -318,7 +325,7 @@ async def process_mailing(call: types.CallbackQuery):
         users = mongoStorage.get_all_users()
         for user in users:
             await bot.send_message(chat_id=user, text=call.message.text)
-        
+
         await bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
         await bot.send_message(chat_id=call.from_user.id, text="Отправлено!")
         mongoStorage.save_mailing(Mailing(
@@ -354,8 +361,8 @@ async def img_mailing(msg: types.Message, state: FSMContext):
 @dp.callback_query_handler(lambda c: "img" in c.data)
 async def process_img_mailing(call: types.CallbackQuery):
     if call.data == "send_img":
-        os.makedirs("imgs", exist_ok=True)
-        img_path = f"imgs/{datetime.now()}.jpg"
+        os.makedirs("data/imgs", exist_ok=True)
+        img_path = f"data/imgs/{datetime.now()}.jpg"
         await call.message.photo[-1].download(destination_file=img_path)
 
         users = mongoStorage.get_all_users()
