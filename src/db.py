@@ -184,7 +184,7 @@ class Storage:
             Question=req["question"]
         )
 
-    def get_admins_id(self) -> list[int]:
+    def get_admins(self) -> list[int]:
         """Метод, который возвращает уникальный список администраторов"""
 
         admins: list[int] = self.admins_cl.distinct("id", {"active": True})
